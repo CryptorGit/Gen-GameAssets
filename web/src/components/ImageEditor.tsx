@@ -17,6 +17,8 @@ export function ImageEditor() {
     setCurrentMask,
     selectObject,
     setImage,
+    sam3Status,
+    isSegmenting,
   } = useAppStore();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -128,38 +130,28 @@ export function ImageEditor() {
     img.src = image;
   }, [image, imageSize, currentPoints, currentMask, objects, canvasSize, selectedObjectId]);
 
-  const generateMask = useCallback(
-    (pts: Point[]) => {
-      if (!imageSize || pts.length === 0) {
-        setCurrentMask(null);
-        return;
-      }
+  // SAM3ステータスに応じたインジケーターの色
+  const sam3StatusColor = useMemo(() => {
+    switch (sam3Status) {
+      case "connected": return "bg-green-500";
+      case "connecting": return "bg-yellow-500 animate-pulse";
+      case "error": return "bg-red-500";
+      default: return "bg-gray-500";
+    }
+  }, [sam3Status]);
 
-      const maskCanvas = document.createElement("canvas");
-      maskCanvas.width = canvasSize.width;
-      maskCanvas.height = canvasSize.height;
-      const ctx = maskCanvas.getContext("2d");
-      if (!ctx) return;
-
-      // ピンク色のマスク（Meta UIに合わせる）
-      pts.forEach((pt) => {
-        const x = (pt.x / imageSize.width) * canvasSize.width;
-        const y = (pt.y / imageSize.height) * canvasSize.height;
-        ctx.beginPath();
-        ctx.arc(x, y, 80, 0, Math.PI * 2);
-        ctx.globalCompositeOperation = pt.type === "remove" ? "destination-out" : "source-over";
-        ctx.fillStyle = pt.type === "remove" ? "rgba(0,0,0,1)" : "rgba(236, 72, 153, 0.6)";
-        ctx.fill();
-      });
-
-      setCurrentMask(maskCanvas.toDataURL());
-    },
-    [imageSize, canvasSize, setCurrentMask]
-  );
+  const sam3StatusText = useMemo(() => {
+    switch (sam3Status) {
+      case "connected": return "SAM3 Connected";
+      case "connecting": return "Connecting...";
+      case "error": return "SAM3 Offline";
+      default: return "Disconnected";
+    }
+  }, [sam3Status]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
-      if (!imageSize) return;
+      if (!imageSize || isSegmenting) return;
       const canvas = canvasRef.current;
       if (!canvas) return;
 
@@ -170,9 +162,9 @@ export function ImageEditor() {
       selectObject(null);
       const nextPoint: Point = { x, y, type: toolMode };
       addPoint(nextPoint);
-      generateMask([...currentPoints, nextPoint]);
+      // セグメンテーションはstore内で自動的に実行される
     },
-    [imageSize, toolMode, currentPoints, addPoint, selectObject, generateMask]
+    [imageSize, toolMode, addPoint, selectObject, isSegmenting]
   );
 
   return (
@@ -180,6 +172,12 @@ export function ImageEditor() {
       {/* ツールバー（Add/Removeトグル） */}
       <div className="h-14 border-b border-gray-800 bg-[#0a0a0a] flex items-center justify-between px-4">
         <div className="flex items-center gap-4">
+          {/* SAM3接続ステータス */}
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-800/50 rounded-lg">
+            <div className={`w-2 h-2 rounded-full ${sam3StatusColor}`} />
+            <span className="text-xs text-gray-400">{sam3StatusText}</span>
+          </div>
+          
           {/* (B-B2) モードトグル：Add / Remove */}
           <div className="flex bg-gray-800 rounded-lg p-1">
             <button
@@ -203,6 +201,14 @@ export function ImageEditor() {
               Remove
             </button>
           </div>
+          
+          {/* セグメンテーション中のインジケーター */}
+          {isSegmenting && (
+            <div className="flex items-center gap-2 text-sm text-blue-400">
+              <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+              <span>Segmenting...</span>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
