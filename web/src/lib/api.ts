@@ -115,40 +115,42 @@ export async function segmentWithText(
 }
 
 // ========================================
-// SAM3D 3D Generation API
+// SAM3D 3D Generation API (Modal)
 // ========================================
 
-export interface GenerateRequest {
-  image: string;
-  mask: string;
-  format: "ply" | "glb";
+export interface Generate3DRequest {
+  image: string;  // Base64エンコードされた元画像
+  mask: string;   // Base64エンコードされたマスク画像
   seed?: number;
+  output_format?: "ply" | "glb";
 }
 
-export interface GenerateResponse {
+export interface Generate3DResponse {
   success: boolean;
-  file: string;
+  model_data: string;  // Base64エンコードされた3Dモデル
   format: string;
   message: string;
 }
 
-export interface HealthResponse {
+export interface SAM3DHealthResponse {
   status: string;
   service: string;
-  version: string;
+  model_loaded: boolean;
+  gpu: string;
+  cuda_available: boolean;
 }
 
 // SAM3D ヘルスチェック
-export async function checkHealth(): Promise<HealthResponse> {
+export async function checkSAM3DHealth(): Promise<SAM3DHealthResponse> {
   const response = await fetch(`${SAM3D_API_URL}/health`);
   if (!response.ok) {
-    throw new Error(`Health check failed: ${response.status}`);
+    throw new Error(`SAM3D health check failed: ${response.status}`);
   }
   return response.json();
 }
 
 // 3Dモデル生成
-export async function generate3D(request: GenerateRequest): Promise<GenerateResponse> {
+export async function generate3D(request: Generate3DRequest): Promise<Generate3DResponse> {
   const response = await fetch(`${SAM3D_API_URL}/generate`, {
     method: "POST",
     headers: {
@@ -157,13 +159,13 @@ export async function generate3D(request: GenerateRequest): Promise<GenerateResp
     body: JSON.stringify({
       image: request.image,
       mask: request.mask,
-      format: request.format,
       seed: request.seed ?? 42,
+      output_format: request.output_format ?? "ply",
     }),
   });
 
   if (!response.ok) {
-    throw new Error(`Generation failed: ${response.status}`);
+    throw new Error(`3D generation failed: ${response.status}`);
   }
 
   return response.json();

@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import { segmentWithPoints, checkSAM3Health } from "./api";
+import { segmentWithPoints, checkSAM3Health, generate3D, base64ToBlob, downloadFile } from "./api";
 
 // ========================================
 // 型定義
@@ -324,57 +324,117 @@ export const useAppStore = create<AppStore>((set, get) => ({
   error: null,
   setError: (error) => set({ error }),
 
-  generateSelected: () => {
-    const { selectedObjectId, objects, updateObjectStatus, updateObjectModel } = get();
-    if (!selectedObjectId) return;
+  generateSelected: async () => {
+    const { selectedObjectId, objects, image, updateObjectStatus, updateObjectModel, setError } = get();
+    if (!selectedObjectId || !image) return;
 
     const obj = objects.find((o) => o.id === selectedObjectId);
     if (!obj || obj.status === "generating" || obj.status === "ready") return;
+    if (!obj.mask) {
+      setError("マスクが設定されていません。先にオブジェクトを選択してください。");
+      return;
+    }
 
     updateObjectStatus(selectedObjectId, "generating");
+    console.log("[SAM3D] Generating 3D model for:", obj.name);
 
-    // デモ: 2秒後に完了
-    setTimeout(() => {
-      updateObjectModel(selectedObjectId, { data: "", format: "ply" });
-    }, 2000);
+    try {
+      const response = await generate3D({
+        image: image,
+        mask: obj.mask,
+        seed: 42,
+        output_format: "ply",
+      });
+
+      if (response.success) {
+        updateObjectModel(selectedObjectId, {
+          data: response.model_data,
+          format: response.format as "ply" | "glb",
+        });
+        console.log("[SAM3D] 3D model generated successfully");
+      } else {
+        throw new Error(response.message);
+      }
+    } catch (error) {
+      console.error("[SAM3D] Generation failed:", error);
+      updateObjectStatus(selectedObjectId, "error");
+      setError(`3D生成エラー: ${error}`);
+    }
   },
 
-  generateAll: () => {
-    const { objects, updateObjectStatus, updateObjectModel } = get();
-    const pendingObjects = objects.filter((o) => o.status === "selecting");
+  generateAll: async () => {
+    const { objects, image, updateObjectStatus, updateObjectModel, setError } = get();
+    const pendingObjects = objects.filter((o) => o.status === "selecting" && o.mask);
 
-    pendingObjects.forEach((obj, i) => {
+    if (!image || pendingObjects.length === 0) {
+      setError("生成可能なオブジェクトがありません。");
+      return;
+    }
+
+    console.log(`[SAM3D] Generating ${pendingObjects.length} objects...`);
+
+    for (const obj of pendingObjects) {
       updateObjectStatus(obj.id, "generating");
-      // デモ: 順次完了
-      setTimeout(() => {
-        updateObjectModel(obj.id, { data: "", format: "ply" });
-      }, 2000 + i * 500);
-    });
+
+      try {
+        const response = await generate3D({
+          image: image,
+          mask: obj.mask!,
+          seed: 42,
+          output_format: "ply",
+        });
+
+        if (response.success) {
+          updateObjectModel(obj.id, {
+            data: response.model_data,
+            format: response.format as "ply" | "glb",
+          });
+          console.log(`[SAM3D] Generated: ${obj.name}`);
+        } else {
+          throw new Error(response.message);
+        }
+      } catch (error) {
+        console.error(`[SAM3D] Failed to generate ${obj.name}:`, error);
+        updateObjectStatus(obj.id, "error");
+      }
+    }
   },
 
   downloadObject: (id) => {
     const { objects } = get();
     const obj = objects.find((o) => o.id === id);
-    if (!obj || !obj.model3D) {
+    if (!obj || !obj.model3D || !obj.model3D.data) {
       alert("No 3D model available for this object.");
       return;
     }
     
-    // 実際のデータがあればダウンロード
-    // ここではデモとしてアラートを表示
-    alert(`Downloading ${obj.name}.ply...`);
+    // Base64データをBlobに変換してダウンロード
+    const mimeType = obj.model3D.format === "glb" ? "model/gltf-binary" : "application/x-ply";
+    const blob = base64ToBlob(obj.model3D.data, mimeType);
+    const filename = `${obj.name.replace(/\s+/g, "_")}.${obj.model3D.format}`;
+    downloadFile(blob, filename);
+    console.log(`[Download] ${filename}`);
   },
 
   downloadScene: () => {
     const { objects } = get();
-    const readyObjects = objects.filter(o => o.status === "ready");
+    const readyObjects = objects.filter(o => o.status === "ready" && o.model3D?.data);
     
     if (readyObjects.length === 0) {
       alert("No 3D models generated yet.");
       return;
     }
 
-    alert(`Downloading scene with ${readyObjects.length} objects...`);
+    // 各オブジェクトを個別にダウンロード
+    readyObjects.forEach((obj, index) => {
+      setTimeout(() => {
+        const mimeType = obj.model3D!.format === "glb" ? "model/gltf-binary" : "application/x-ply";
+        const blob = base64ToBlob(obj.model3D!.data, mimeType);
+        const filename = `${obj.name.replace(/\s+/g, "_")}.${obj.model3D!.format}`;
+        downloadFile(blob, filename);
+      }, index * 500); // 500ms間隔でダウンロード
+    });
+    console.log(`[Download] ${readyObjects.length} objects`);
   },
 
   reset: () => {
