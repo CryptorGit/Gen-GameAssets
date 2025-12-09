@@ -24,6 +24,18 @@ modal setup
 modal secret create huggingface-secret HF_TOKEN=<your-huggingface-token>
 ```
 
+### 2.5 GPUタイプ設定 (任意)
+
+デフォルトは A10G。A100 などに変えたい場合はデプロイ前に環境変数を指定してください。
+
+```bash
+# Bash
+export GPU_TYPE=A100
+
+# PowerShell
+$env:GPU_TYPE="A100"
+```
+
 ### 3. デプロイ
 
 ```bash
@@ -75,10 +87,10 @@ modal deploy sam3d_modal.py
 
 ## フロントエンド設定
 
-環境変数でModalのURLを設定：
+`web/.env.local` に Modal の URL を設定します。
 
 ```bash
-# .env.local
+# web/.env.local
 NEXT_PUBLIC_SAM3D_API_URL=https://<your-app>.modal.run
 ```
 

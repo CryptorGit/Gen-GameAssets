@@ -11,31 +11,51 @@ Modal上のGPUで動作するSAM3D 3Dモデル生成サーバー
     modal deploy sam3d_modal.py
 """
 
-import modal
-import io
 import base64
+import io
+import os
 from typing import Optional
+
+import modal
 
 # Modal App定義
 app = modal.App("sam3d-generation-server")
 
+# GPU種別（A100に変更）
+GPU_TYPE = "A100"
+
 # Docker イメージ定義（SAM3D依存関係）
 sam3d_image = (
-    modal.Image.debian_slim(python_version="3.12")
+    modal.Image.from_registry(
+        "nvidia/cuda:12.1.1-devel-ubuntu22.04",
+        add_python="3.11"
+    )
     .apt_install(
         "git", "wget", "libgl1-mesa-glx", "libglib2.0-0", 
-        "libsm6", "libxext6", "libxrender-dev", "libgomp1"
+        "libsm6", "libxext6", "libxrender-dev", "libgomp1",
+        "build-essential", "ninja-build", "curl",
+        "g++", "clang"  # PyTorch3D ビルド用コンパイラ
     )
+    # PyTorch + CUDA (PyPI index使用)
     .pip_install(
-        "torch>=2.4.0",
-        "torchvision",
-        "numpy",
+        "torch==2.4.1+cu121",
+        "torchvision==0.19.1+cu121",
+        "torchaudio==2.4.1+cu121",
+        extra_options="--index-url https://download.pytorch.org/whl/cu121"
+    )
+    # 基本依存関係 + SAM3D全依存関係 (PyTorch 2.4.1 との互換性維持)
+    .pip_install(
+        # 基本ライブラリ
+        "numpy<2",
         "pillow",
         "fastapi[standard]",
         "pydantic",
+        
+        # SAM3D コア依存
         "omegaconf",
         "hydra-core",
         "einops",
+        "einops-exts",
         "trimesh",
         "plyfile",
         "scipy",
@@ -45,15 +65,76 @@ sam3d_image = (
         "safetensors",
         "accelerate",
         "transformers",
+        "roma",
+        "open3d",
+        "lightning",
+        "timm",
+        
+        # SAM3D inference依存
+        "seaborn",
+        "matplotlib",
+        "gradio",
+        "loguru",
+        "optree",
+        "astor",
+        
+        # PyTorch3D / Kaolin 依存
+        "fvcore",
+        "iopath",
+        
+        # Sparse Convolution (CUDA 12.1)
+        "spconv-cu121",
+        
+        # 追加SAM3D依存
+        "h5py",
+        "easydict",
+        "ftfy",
+        "gdown",
+        "rootutils",
+        "point-cloud-utils",
+        "xatlas",
+        "pyrender",
+        "pymeshfix",
+        "python-igraph",  # SAM3D graph処理用
     )
-    # PyTorch3D (CUDA対応版)
+    # xformers (torch 2.4.1 + CUDA 12.1 対応) - 別途インストールで依存関係を制御
     .pip_install(
-        "pytorch3d",
-        extra_options="--extra-index-url https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py312_cu121_pyt241/download.html"
+        "xformers==0.0.28.post1",
+        extra_options="--no-deps"
     )
-    # SAM3D Objects
+    # wheel + setuptools (ビルド依存)
+    .pip_install("wheel", "setuptools", "packaging")
+    # flash-attention (CUDA develイメージでビルド)
     .run_commands(
-        "pip install git+https://github.com/facebookresearch/sam-3d-objects.git"
+        "pip install flash-attn==2.5.9.post1 --no-build-isolation"
+    )
+    # NVIDIA Kaolin (3D Deep Learning)
+    .pip_install(
+        "kaolin==0.17.0",
+        extra_options="-f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.4.1_cu121.html"
+    )
+    # PyTorch3D (ソースからビルド - torchが既にインストール済み)
+    .run_commands(
+        "MAX_JOBS=2 pip install --no-build-isolation 'git+https://github.com/facebookresearch/pytorch3d.git@stable'"
+    )
+    # SAM3D Objects - ソースクローンして依存関係なしでインストール
+    .run_commands(
+        "cd /root && git clone https://github.com/facebookresearch/sam-3d-objects.git",
+        "cd /root/sam-3d-objects && pip install --no-deps -e .",
+    )
+    # MoGe 依存関係 (utils3d + pipeline の特定バージョン)
+    # SAM3D Objectsが必要とするutils3dバージョン: depth_edge, normals_edge を含む
+    .run_commands(
+        "pip install 'git+https://github.com/EasternJournalist/utils3d.git@3913c65d81e05e47b9f367250cf8c0f7462a0900'",
+        "pip install 'git+https://github.com/EasternJournalist/pipeline.git@866f059d2a05cde05e4a52211ec5051fd5f276d6' --no-deps",
+    )
+    # MoGe (深度推定用) - SAM3D Objectsが使用するバージョンと同じコミット
+    .run_commands(
+        "pip install 'git+https://github.com/microsoft/MoGe.git@a8c37341bc0325ca99b9d57981cc3bb2bd3e255b' --no-deps"
+    )
+    # gsplat (Gaussian Splatting rendering) - CUDA_HOME設定 + TORCH_CUDA_ARCH_LIST明示
+    .run_commands(
+        "TORCH_CUDA_ARCH_LIST='8.0' CUDA_HOME=/usr/local/cuda pip install 'git+https://github.com/nerfstudio-project/gsplat.git' --no-build-isolation"
     )
 )
 
@@ -64,10 +145,10 @@ CHECKPOINT_PATH = "/checkpoints"
 
 @app.cls(
     image=sam3d_image,
-    gpu="A10G",  # A10G GPU (24GB VRAM)
+    gpu=GPU_TYPE,  # 環境変数GPU_TYPEで上書き可能
     timeout=600,
     volumes={CHECKPOINT_PATH: volume},
-    secrets=[modal.Secret.from_name("huggingface-secret", required=False)],
+    secrets=[modal.Secret.from_name("huggingface-secret")],
 )
 class SAM3DGenerator:
     """SAM3D 3Dモデル生成クラス"""
@@ -82,41 +163,106 @@ class SAM3DGenerator:
         
         print("Setting up SAM3D Generator...")
         
-        # HuggingFaceトークン設定
+        # CONDA_PREFIX環境変数のフォールバック（SAM3Dが参照する）
+        if "CONDA_PREFIX" not in os.environ:
+            os.environ["CONDA_PREFIX"] = "/usr/local"
+        
+        # HuggingFaceトークン設定（環境変数から取得）
         hf_token = os.environ.get("HF_TOKEN")
         if hf_token:
             from huggingface_hub import login
             login(token=hf_token)
+            print("Logged in to HuggingFace")
+        else:
+            print("Warning: HF_TOKEN not set, using fallback checkpoints")
         
-        # チェックポイントダウンロード
-        checkpoint_dir = f"{CHECKPOINT_PATH}/hf"
-        if not os.path.exists(f"{checkpoint_dir}/pipeline.yaml"):
-            print("Downloading SAM3D checkpoints...")
+        # チェックポイントディレクトリ
+        # HuggingFaceリポジトリ全体がダウンロードされるので、checkpoints/サブディレクトリを参照
+        hf_repo_dir = f"{CHECKPOINT_PATH}/hf"
+        checkpoint_dir = f"{hf_repo_dir}/checkpoints"
+        download_success = False
+        
+        # 既にダウンロード済みかチェック (checkpointsサブディレクトリ内を確認)
+        if os.path.exists(f"{checkpoint_dir}/pipeline.yaml"):
+            print(f"Checkpoints already exist at {checkpoint_dir}")
+            download_success = True
+        elif hf_token:
+            print("Downloading SAM3D checkpoints from HuggingFace...")
             try:
                 snapshot_download(
                     repo_id="facebook/sam-3d-objects",
-                    local_dir=checkpoint_dir,
+                    local_dir=hf_repo_dir,
                     token=hf_token,
                 )
                 volume.commit()
+                print(f"Repository downloaded to {hf_repo_dir}")
+                
+                # ダウンロード後にディレクトリの内容を確認
+                print(f"Listing {hf_repo_dir}/")
+                for item in os.listdir(hf_repo_dir):
+                    print(f"  {item}")
+                
+                # checkpointsサブディレクトリを確認
+                if os.path.exists(checkpoint_dir):
+                    print(f"Listing {checkpoint_dir}/")
+                    for item in os.listdir(checkpoint_dir):
+                        print(f"  {item}")
+                    download_success = True
+                else:
+                    print(f"ERROR: checkpoints subdirectory not found at {checkpoint_dir}")
+                    download_success = False
             except Exception as e:
                 print(f"Failed to download checkpoints: {e}")
-                # フォールバック: ローカルチェックポイント使用
-                checkpoint_dir = "/root/sam-3d-objects/checkpoints/hf"
+                download_success = False
+        
+        # ダウンロード成功時はそのディレクトリを使用
+        if download_success:
+            print(f"Using HuggingFace checkpoints: {checkpoint_dir}")
+        else:
+            # フォールバック: ローカルチェックポイント使用
+            checkpoint_dir = "/root/sam-3d-objects/checkpoints/hf"
+            print(f"Falling back to local checkpoints: {checkpoint_dir}")
+            
+            # ローカルチェックポイントが存在するか確認
+            if not os.path.exists(checkpoint_dir):
+                print(f"ERROR: Checkpoints directory not found: {checkpoint_dir}")
+                print("Listing /root/sam-3d-objects/")
+                for item in os.listdir("/root/sam-3d-objects/"):
+                    print(f"  {item}")
+                self.ready = False
+                self.inference = None
+                return
         
         # SAM3D Inferenceロード
         sys.path.insert(0, "/root/sam-3d-objects/notebook")
+        self.error_message = None
         
         try:
             from inference import Inference
             config_path = f"{checkpoint_dir}/pipeline.yaml"
+            print(f"Loading inference from config: {config_path}")
+            
+            if not os.path.exists(config_path):
+                print(f"ERROR: Config file not found: {config_path}")
+                print(f"Listing {checkpoint_dir}/")
+                if os.path.exists(checkpoint_dir):
+                    for item in os.listdir(checkpoint_dir):
+                        print(f"  {item}")
+                self.ready = False
+                self.inference = None
+                self.error_message = f"Config file not found: {config_path}"
+                return
+            
             self.inference = Inference(config_path, compile=False)
             self.ready = True
             print("SAM3D model loaded successfully!")
         except Exception as e:
+            import traceback
             print(f"Failed to load SAM3D model: {e}")
+            traceback.print_exc()
             self.ready = False
             self.inference = None
+            self.error_message = str(e)
     
     @modal.method()
     def generate_3d(
@@ -227,7 +373,45 @@ class SAM3DGenerator:
             "model_loaded": self.ready,
             "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none",
             "cuda_available": torch.cuda.is_available(),
+            "error_message": getattr(self, 'error_message', None),
         }
+    
+    @modal.method()
+    def debug_info(self) -> dict:
+        """詳細デバッグ情報"""
+        import os
+        import sys
+        import torch
+        
+        debug = {
+            "ready": getattr(self, 'ready', False),
+            "error_message": getattr(self, 'error_message', None),
+            "cuda_available": torch.cuda.is_available(),
+            "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none",
+            "hf_token_set": bool(os.environ.get("HF_TOKEN")),
+            "checkpoints_exist": {},
+            "notebook_path_exists": os.path.exists("/root/sam-3d-objects/notebook"),
+            "inference_module_exists": os.path.exists("/root/sam-3d-objects/notebook/inference.py"),
+        }
+        
+        # チェックポイントディレクトリの確認
+        for path in [f"{CHECKPOINT_PATH}/hf", f"{CHECKPOINT_PATH}/hf/checkpoints", "/root/sam-3d-objects/checkpoints"]:
+            if os.path.exists(path):
+                try:
+                    debug["checkpoints_exist"][path] = os.listdir(path)[:20]  # 最初の20アイテム
+                except Exception as e:
+                    debug["checkpoints_exist"][path] = f"Error: {e}"
+            else:
+                debug["checkpoints_exist"][path] = False
+        
+        # pipeline.yaml の存在確認
+        for path in [f"{CHECKPOINT_PATH}/hf/checkpoints/pipeline.yaml", f"{CHECKPOINT_PATH}/hf/pipeline.yaml", "/root/sam-3d-objects/checkpoints/pipeline.yaml"]:
+            debug[f"pipeline_exists_{path.replace('/', '_')}"] = os.path.exists(path)
+        
+        # sys.pathの確認
+        debug["sys_path"] = sys.path[:10]
+        
+        return debug
 
 
 # FastAPI Web エンドポイント
@@ -274,11 +458,18 @@ def web_app():
         model_loaded: bool
         gpu: str
         cuda_available: bool
+        error_message: Optional[str] = None
     
     @api.get("/health", response_model=HealthResponse)
     async def health():
         generator = SAM3DGenerator()
         return generator.health_check.remote()
+    
+    @api.get("/debug")
+    async def debug():
+        """詳細デバッグ情報"""
+        generator = SAM3DGenerator()
+        return generator.debug_info.remote()
     
     @api.post("/generate", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
