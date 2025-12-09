@@ -91,6 +91,10 @@ export interface AppStore {
   downloadObject: (id: string) => void;
   downloadScene: () => void;
 
+  // マスクエクスポート
+  exportMask: (id: string) => void;
+  exportAllMasks: () => void;
+
   // リセット
   reset: () => void;
   resetScene: () => void;
@@ -435,6 +439,53 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }, index * 500); // 500ms間隔でダウンロード
     });
     console.log(`[Download] ${readyObjects.length} objects`);
+  },
+
+  exportMask: (id) => {
+    const { objects, image } = get();
+    const obj = objects.find((o) => o.id === id);
+    if (!obj || !obj.mask) {
+      alert("No mask available for this object.");
+      return;
+    }
+    
+    // マスク画像をダウンロード
+    const link = document.createElement("a");
+    link.href = obj.mask;
+    link.download = `${obj.name.replace(/\s+/g, "_")}_mask.png`;
+    link.click();
+    console.log(`[Export Mask] ${obj.name}`);
+  },
+
+  exportAllMasks: async () => {
+    const { objects, image } = get();
+    const objectsWithMask = objects.filter(o => o.mask);
+    
+    if (objectsWithMask.length === 0) {
+      alert("No masks to export.");
+      return;
+    }
+
+    // 元画像もダウンロード
+    if (image) {
+      const imageLink = document.createElement("a");
+      imageLink.href = image;
+      imageLink.download = "original_image.png";
+      imageLink.click();
+    }
+
+    // 各マスクを順番にダウンロード
+    objectsWithMask.forEach((obj, index) => {
+      setTimeout(() => {
+        const link = document.createElement("a");
+        link.href = obj.mask!;
+        link.download = `${obj.name.replace(/\s+/g, "_")}_mask.png`;
+        link.click();
+        console.log(`[Export Mask] ${obj.name}`);
+      }, (index + 1) * 300);
+    });
+    
+    console.log(`[Export All] ${objectsWithMask.length} masks + original image`);
   },
 
   reset: () => {

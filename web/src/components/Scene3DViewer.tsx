@@ -1,9 +1,8 @@
 "use client";
 
-import { useRef, useCallback } from "react";
+import { useRef, useCallback, Suspense, useState, useEffect } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import {
-  Environment,
   Grid,
   OrbitControls,
   PerspectiveCamera,
@@ -89,10 +88,11 @@ function SceneContent() {
   return (
     <>
       <PerspectiveCamera makeDefault position={[5, 4.5, 5.5]} fov={50} />
-      <color attach="background" args={["#000000"]} />
-      <ambientLight intensity={0.5} />
-      <directionalLight position={[6, 9, 6]} intensity={1} castShadow />
-      <Environment preset="city" />
+      <color attach="background" args={["#0a0a0a"]} />
+      <ambientLight intensity={0.6} />
+      <directionalLight position={[6, 9, 6]} intensity={1.2} castShadow />
+      <directionalLight position={[-4, 5, -4]} intensity={0.4} />
+      <hemisphereLight intensity={0.3} groundColor="#333333" />
 
       <Grid
         args={[20, 20]}
@@ -166,8 +166,16 @@ export function Scene3DViewer() {
 
       {/* 3Dキャンバス */}
       <div className="flex-1 relative">
-        <Canvas shadows>
-          <SceneContent />
+        <Canvas 
+          shadows
+          gl={{ antialias: true, alpha: false }}
+          onCreated={({ gl }) => {
+            gl.setClearColor(new THREE.Color("#000000"));
+          }}
+        >
+          <Suspense fallback={null}>
+            <SceneContent />
+          </Suspense>
         </Canvas>
 
         {/* 空状態の表示 */}

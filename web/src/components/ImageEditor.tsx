@@ -66,35 +66,83 @@ export function ImageEditor() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-      // 既存オブジェクトのポイント表示
-      objects.forEach((obj) => {
-        if (!obj.visible) return;
+      // 既存オブジェクトのマスクとポイント表示
+      const drawObjectOverlays = () => {
+        objects.forEach((obj) => {
+          if (!obj.visible) return;
 
-        obj.points.forEach((pt) => {
-          const x = (pt.x / (imageSize?.width || 1)) * canvas.width;
-          const y = (pt.y / (imageSize?.height || 1)) * canvas.height;
+          // オブジェクトのマスクを表示（色付きオーバーレイ）
+          if (obj.mask) {
+            const objMaskImg = new Image();
+            objMaskImg.onload = () => {
+              // マスク画像をオフスクリーンキャンバスに描画
+              const offscreen = document.createElement("canvas");
+              offscreen.width = canvas.width;
+              offscreen.height = canvas.height;
+              const offCtx = offscreen.getContext("2d");
+              if (!offCtx) return;
 
-          ctx.beginPath();
-          ctx.arc(x, y, 60, 0, Math.PI * 2);
-          ctx.fillStyle = `${obj.color}${selectedObjectId === obj.id ? "55" : "26"}`;
-          ctx.fill();
+              offCtx.drawImage(objMaskImg, 0, 0, canvas.width, canvas.height);
+              const maskData = offCtx.getImageData(0, 0, canvas.width, canvas.height);
+
+              // マスクの白い部分をオブジェクトの色で塗る
+              for (let i = 0; i < maskData.data.length; i += 4) {
+                if (maskData.data[i] > 127) {
+                  // 白い部分 -> オブジェクトの色
+                  const hex = obj.color.replace("#", "");
+                  maskData.data[i] = parseInt(hex.substring(0, 2), 16);
+                  maskData.data[i + 1] = parseInt(hex.substring(2, 4), 16);
+                  maskData.data[i + 2] = parseInt(hex.substring(4, 6), 16);
+                  maskData.data[i + 3] = selectedObjectId === obj.id ? 120 : 60;
+                } else {
+                  maskData.data[i + 3] = 0; // 透明
+                }
+              }
+
+              offCtx.putImageData(maskData, 0, 0);
+              ctx.drawImage(offscreen, 0, 0);
+
+              // ポイントマーカーを描画
+              obj.points.forEach((pt) => {
+                const x = (pt.x / (imageSize?.width || 1)) * canvas.width;
+                const y = (pt.y / (imageSize?.height || 1)) * canvas.height;
+
+                ctx.beginPath();
+                ctx.arc(x, y, 6, 0, Math.PI * 2);
+                ctx.fillStyle = obj.color;
+                ctx.fill();
+                ctx.strokeStyle = selectedObjectId === obj.id ? "#ffffff" : "#0f172acc";
+                ctx.lineWidth = 2;
+                ctx.stroke();
+              });
+            };
+            objMaskImg.src = obj.mask;
+          } else {
+            // マスクがない場合は円で表示（フォールバック）
+            obj.points.forEach((pt) => {
+              const x = (pt.x / (imageSize?.width || 1)) * canvas.width;
+              const y = (pt.y / (imageSize?.height || 1)) * canvas.height;
+
+              ctx.beginPath();
+              ctx.arc(x, y, 60, 0, Math.PI * 2);
+              ctx.fillStyle = `${obj.color}${selectedObjectId === obj.id ? "55" : "26"}`;
+              ctx.fill();
+
+              ctx.beginPath();
+              ctx.arc(x, y, 6, 0, Math.PI * 2);
+              ctx.fillStyle = obj.color;
+              ctx.fill();
+              ctx.strokeStyle = selectedObjectId === obj.id ? "#ffffff" : "#0f172acc";
+              ctx.lineWidth = 2;
+              ctx.stroke();
+            });
+          }
         });
+      };
 
-        obj.points.forEach((pt) => {
-          const x = (pt.x / (imageSize?.width || 1)) * canvas.width;
-          const y = (pt.y / (imageSize?.height || 1)) * canvas.height;
+      drawObjectOverlays();
 
-          ctx.beginPath();
-          ctx.arc(x, y, 6, 0, Math.PI * 2);
-          ctx.fillStyle = obj.color;
-          ctx.fill();
-          ctx.strokeStyle = selectedObjectId === obj.id ? "#ffffff" : "#0f172acc";
-          ctx.lineWidth = 2;
-          ctx.stroke();
-        });
-      });
-
-      // 現在のマスク表示（ピンク色でオーバーレイ）
+      // 現在編集中のマスク表示（ピンク/水色でオーバーレイ）
       if (currentMask) {
         const maskImg = new Image();
         maskImg.onload = () => {

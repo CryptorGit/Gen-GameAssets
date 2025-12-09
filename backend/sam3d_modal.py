@@ -323,8 +323,24 @@ class SAM3DGenerator:
             print(f"Input image size: {image_np.shape}")
             print(f"Mask size: {mask_binary.shape}")
             
-            # SAM3D推論実行
-            output = self.inference(image_np, mask_binary, seed=seed)
+            # SAM3D推論実行（GLB出力）
+            if output_format == "glb":
+                # use_vertex_color=True + with_mesh_postprocess=False でnvdiffrastを回避
+                self.inference._pipeline.rendering_engine = "pytorch3d"
+                output = self.inference._pipeline.run(
+                    self.inference.merge_mask_to_rgba(image_np, mask_binary),
+                    None,
+                    seed,
+                    stage1_only=False,
+                    with_mesh_postprocess=False,  # nvdiffrast不要にするため
+                    with_texture_baking=False,    # nvdiffrast不要にするため
+                    with_layout_postprocess=True,
+                    use_vertex_color=True,        # 頂点カラーを使用
+                    stage1_inference_steps=None,
+                    pointmap=None,
+                )
+            else:
+                output = self.inference(image_np, mask_binary, seed=seed)
             
             # 3Dモデルをエクスポート
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -332,12 +348,15 @@ class SAM3DGenerator:
                     output_path = f"{tmpdir}/output.ply"
                     output["gs"].save_ply(output_path)
                 else:
-                    # GLBエクスポート（meshがある場合）
+                    # GLBエクスポート（glbオブジェクトがある場合）
                     output_path = f"{tmpdir}/output.glb"
-                    if "mesh" in output and output["mesh"] is not None:
-                        output["mesh"].export(output_path)
+                    if "glb" in output and output["glb"] is not None:
+                        output["glb"].export(output_path)
+                    elif "mesh" in output and output["mesh"] is not None:
+                        output["mesh"][0].export(output_path)
                     else:
                         # PLYにフォールバック
+                        print("GLB/mesh not available, falling back to PLY")
                         output_path = f"{tmpdir}/output.ply"
                         output["gs"].save_ply(output_path)
                         output_format = "ply"

@@ -124,7 +124,8 @@ function MaskToolbar({
   canGenerate: boolean;
   onGenerate: () => void;
 }) {
-  const { currentPoints } = useAppStore();
+  const { currentPoints, objects, exportAllMasks } = useAppStore();
+  const hasObjects = objects.length > 0;
 
   return (
     <div className="h-16 border-t border-gray-800 bg-[#0a0a0a] flex items-center justify-between px-4">
@@ -140,26 +141,44 @@ function MaskToolbar({
         )}
       </div>
 
-      {/* (B-B3) Generate 3D ボタン */}
-      <button
-        onClick={onGenerate}
-        disabled={!canGenerate}
-        className={`px-6 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center gap-2 ${
-          canGenerate
-            ? "bg-white text-black hover:bg-gray-200"
-            : "bg-gray-800 text-gray-500 cursor-not-allowed"
-        }`}
-      >
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={1.5}
-            d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"
-          />
-        </svg>
-        Generate 3D
-      </button>
+      <div className="flex items-center gap-3">
+        {/* Export Masks ボタン */}
+        <button
+          onClick={exportAllMasks}
+          disabled={!hasObjects}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+            hasObjects
+              ? "bg-green-600 text-white hover:bg-green-500"
+              : "bg-gray-800 text-gray-500 cursor-not-allowed"
+          }`}
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+          </svg>
+          Export Masks
+        </button>
+
+        {/* (B-B3) Generate 3D ボタン */}
+        <button
+          onClick={onGenerate}
+          disabled={!canGenerate}
+          className={`px-6 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center gap-2 ${
+            canGenerate
+              ? "bg-white text-black hover:bg-gray-200"
+              : "bg-gray-800 text-gray-500 cursor-not-allowed"
+          }`}
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={1.5}
+              d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"
+            />
+          </svg>
+          Generate 3D
+        </button>
+      </div>
     </div>
   );
 }

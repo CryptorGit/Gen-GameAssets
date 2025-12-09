@@ -110,3 +110,7 @@ temp/
 # 3D関連
 *.blend1
 *.blend2
+
+# 入出力
+images/
+models/
